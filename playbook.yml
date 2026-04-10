@@ -21,6 +21,7 @@
 
   tasks:
     - name: 1. 安装 Fish
+      ignore_errors: true
       block:
         - name: 1.1 安装添加 Fish 仓库所需组件
           apt:
@@ -45,6 +46,7 @@
             state: present
 
     - name: 2. 安装基础软件
+      ignore_errors: true
       apt:
         name:
           [
@@ -59,6 +61,7 @@
         state: present
 
     - name: 3. 安装 zoxide
+      ignore_errors: true
       block:
         - name: 3.1 优先通过 apt 安装 zoxide
           apt:
@@ -110,6 +113,7 @@
           when: zoxide_archive_arch is defined
 
     - name: 4. 安装 eza
+      ignore_errors: true
       block:
         - name: 4.1 优先通过 apt 安装 eza
           apt:
@@ -161,6 +165,7 @@
           when: eza_archive_arch is defined
 
     - name: 5. 安装 yq
+      ignore_errors: true
       block:
         - name: 5.1 计算 yq 官方二进制架构
           set_fact:
@@ -180,6 +185,7 @@
             timeout: 60
 
     - name: 6. 安装 lsd
+      ignore_errors: true
       block:
         - name: 6.1 优先通过 apt 安装 lsd
           apt:
@@ -234,6 +240,7 @@
             - ansible_architecture not in ['x86_64', 'aarch64']
 
     - name: 7. 下载并安装最新版 fzf 二进制文件
+      ignore_errors: true
       block:
         - name: 下载 fzf 压缩包
           get_url:
@@ -260,6 +267,7 @@
             group: root
 
     - name: 8. 安装 Lazygit
+      ignore_errors: true
       block:
         - name: 8.1 计算 Lazygit 官方二进制架构
           set_fact:
@@ -360,18 +368,9 @@
             mode: "0644"
 
     - name: 10. 安装 Neovim 和 NvChad
+      ignore_errors: true
       block:
-        - name: 10.1 计算 Neovim 官方二进制架构
-          set_fact:
-            neovim_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
-          when: ansible_architecture in ['x86_64', 'aarch64']
-
-        - name: 10.2 不支持的 Neovim 架构提示
-          fail:
-            msg: "当前架构 {{ ansible_architecture }} 未配置 Neovim 官方二进制下载规则，请补充 playbook。"
-          when: ansible_architecture not in ['x86_64', 'aarch64']
-
-        - name: 10.3 安装 Neovim 运行依赖
+        - name: 10.1 安装 Neovim 运行依赖
           apt:
             name:
               - unzip
@@ -385,42 +384,58 @@
               - python3-pynvim
             state: present
 
-        - name: 10.4 下载官方 Neovim 二进制包
-          get_url:
-            url: "https://github.com/neovim/neovim/releases/download/v{{ neovim_version }}/nvim-linux-{{ neovim_archive_arch }}.tar.gz"
-            dest: /tmp/nvim.tar.gz
-            mode: "0644"
-            timeout: 60
+        - name: 10.2 通过 apt + PPA 安装 Neovim
+          block:
+            - name: 10.2.1 安装添加 PPA 所需组件
+              apt:
+                name:
+                  - software-properties-common
+                state: present
 
-        - name: 10.5 清理旧的官方 Neovim 安装目录
-          file:
-            path: /opt/nvim
-            state: absent
+            - name: 10.2.2 添加 Neovim stable PPA
+              apt_repository:
+                repo: ppa:neovim-ppa/stable
+                state: present
+                update_cache: no
 
-        - name: 10.6 创建官方 Neovim 安装目录
-          file:
-            path: /opt/nvim
-            state: directory
-            owner: root
-            group: root
-            mode: "0755"
+            - name: 10.2.3 更新 apt 缓存
+              apt:
+                update_cache: yes
 
-        - name: 10.7 解压官方 Neovim 二进制包到目标目录
-          unarchive:
-            src: /tmp/nvim.tar.gz
-            dest: /opt/nvim
-            remote_src: yes
-            extra_opts:
-              - --strip-components=1
+            - name: 10.2.4 通过 apt 安装 Neovim
+              apt:
+                name: neovim
+                state: present
+          rescue:
+            - name: 10.2.5 非 Ubuntu 系统不执行 Neovim 回退安装
+              fail:
+                msg: "当前系统 {{ ansible_distribution }} {{ ansible_distribution_version }} 未配置 Neovim 回退安装逻辑，请补充 playbook。"
+              when: ansible_distribution != 'Ubuntu'
 
-        - name: 10.8 创建 nvim 可执行文件软链接
-          file:
-            src: /opt/nvim/bin/nvim
-            dest: /usr/local/bin/nvim
-            state: link
-            force: true
+            - name: 10.2.6 计算 Neovim 回退安装包架构
+              set_fact:
+                neovim_release_deb_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+              when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 10.9 创建 Neovim 配置父目录
+            - name: 10.2.7 不支持的 Neovim 回退架构提示
+              fail:
+                msg: "当前架构 {{ ansible_architecture }} 未配置 Neovim 回退下载规则，请补充 playbook。"
+              when: ansible_architecture not in ['x86_64', 'aarch64']
+
+            - name: 10.2.8 下载 Neovim 回退安装包
+              get_url:
+                url: "https://github.com/neovim/neovim-releases/releases/download/v{{ neovim_version }}/nvim-linux-{{ neovim_release_deb_arch }}.deb"
+                dest: /tmp/nvim.deb
+                mode: "0644"
+                timeout: 60
+              when: neovim_release_deb_arch is defined
+
+            - name: 10.2.9 安装 Neovim 回退安装包
+              apt:
+                deb: /tmp/nvim.deb
+              when: neovim_release_deb_arch is defined
+
+        - name: 10.3 创建 Neovim 配置父目录
           file:
             path: "{{ user_home }}/.config"
             state: directory
@@ -428,12 +443,12 @@
             group: "{{ current_user }}"
             mode: "0755"
 
-        - name: 10.10 清理已有的 Neovim 配置目录
+        - name: 10.4 清理已有的 Neovim 配置目录
           file:
             path: "{{ user_home }}/.config/nvim"
             state: absent
 
-        - name: 10.11 克隆 NvChad starter 配置
+        - name: 10.5 克隆 NvChad starter 配置
           become: true
           become_user: "{{ current_user }}"
           git:
@@ -442,12 +457,12 @@
             version: main
             update: yes
 
-        - name: 10.12 删除 NvChad starter 自带 git 元数据
+        - name: 10.6 删除 NvChad starter 自带 git 元数据
           file:
             path: "{{ user_home }}/.config/nvim/.git"
             state: absent
 
-        - name: 10.13 首次同步 NvChad 插件
+        - name: 10.7 首次同步 NvChad 插件
           become: true
           become_user: "{{ current_user }}"
           shell: nvim --headless "+Lazy! sync" +qa
@@ -457,12 +472,11 @@
             HOME: "{{ user_home }}"
           changed_when: false
 
-        - name: 10.14 提示后续执行 MasonInstallAll 和 TSInstallAll
+        - name: 10.8 提示后续执行 MasonInstallAll 和 TSInstallAll
           debug:
             msg: >-
               NvChad 已部署完成。根据 NvChad 官方安装文档，首次进入 nvim 后可继续执行
               :MasonInstallAll 和 :TSInstallAll 以安装语言服务器和 Treesitter 解析器。
-
     - name: 11. 将当前用户的默认 Shell 改为 Fish
       user:
         name: "{{ current_user }}"
@@ -487,3 +501,6 @@
             src: /usr/bin/fdfind
             dest: /usr/local/bin/fd
             state: link
+
+
+
