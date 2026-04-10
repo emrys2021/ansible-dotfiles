@@ -10,6 +10,8 @@
   vars:
     # 定义想要安装的版本，方便以后升级
     fzf_version: "0.71.0"
+    zoxide_version: "0.9.8"
+    eza_version: "0.23.4"
     lsd_version: "1.2.0"
     yq_version: "4.50.1"
     lazygit_version: "0.56.0"
@@ -50,53 +52,153 @@
             direnv,
             curl,
             jq,
-            zoxide,
             bat,
-            eza,
             fd-find,
             python3-pexpect,
           ]
         state: present
 
-    - name: 3. 安装 yq
+    - name: 3. 安装 zoxide
       block:
-        - name: 3.1 计算 yq 官方二进制架构
+        - name: 3.1 优先通过 apt 安装 zoxide
+          apt:
+            name: zoxide
+            state: present
+      rescue:
+        - name: 3.2 计算 zoxide 官方二进制架构
+          set_fact:
+            zoxide_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'aarch64'}[ansible_architecture] }}"
+          when: ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 3.3 不支持的 zoxide 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 zoxide 官方二进制下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 3.4 创建 zoxide 临时解压目录
+          file:
+            path: /tmp/zoxide
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+          when: zoxide_archive_arch is defined
+
+        - name: 3.5 下载 zoxide 官方二进制包
+          get_url:
+            url: "https://github.com/ajeetdsouza/zoxide/releases/download/v{{ zoxide_version }}/zoxide-{{ zoxide_version }}-{{ zoxide_archive_arch }}-unknown-linux-musl.tar.gz"
+            dest: /tmp/zoxide.tar.gz
+            mode: "0644"
+            timeout: 60
+          when: zoxide_archive_arch is defined
+
+        - name: 3.6 解压 zoxide 官方二进制包
+          unarchive:
+            src: /tmp/zoxide.tar.gz
+            dest: /tmp/zoxide
+            remote_src: yes
+          when: zoxide_archive_arch is defined
+
+        - name: 3.7 安装 zoxide 可执行文件
+          copy:
+            src: /tmp/zoxide/zoxide
+            dest: /usr/local/bin/zoxide
+            owner: root
+            group: root
+            mode: "0755"
+            remote_src: yes
+          when: zoxide_archive_arch is defined
+
+    - name: 4. 安装 eza
+      block:
+        - name: 4.1 优先通过 apt 安装 eza
+          apt:
+            name: eza
+            state: present
+      rescue:
+        - name: 4.2 计算 eza 官方二进制架构
+          set_fact:
+            eza_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'aarch64'}[ansible_architecture] }}"
+          when: ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 4.3 不支持的 eza 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 eza 官方二进制下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 4.4 创建 eza 临时解压目录
+          file:
+            path: /tmp/eza
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+          when: eza_archive_arch is defined
+
+        - name: 4.5 下载 eza 官方二进制包
+          get_url:
+            url: "https://github.com/eza-community/eza/releases/download/v{{ eza_version }}/eza_{{ eza_archive_arch }}-unknown-linux-gnu.tar.gz"
+            dest: /tmp/eza.tar.gz
+            mode: "0644"
+            timeout: 60
+          when: eza_archive_arch is defined
+
+        - name: 4.6 解压 eza 官方二进制包
+          unarchive:
+            src: /tmp/eza.tar.gz
+            dest: /tmp/eza
+            remote_src: yes
+          when: eza_archive_arch is defined
+
+        - name: 4.7 安装 eza 可执行文件
+          copy:
+            src: /tmp/eza/eza
+            dest: /usr/local/bin/eza
+            owner: root
+            group: root
+            mode: "0755"
+            remote_src: yes
+          when: eza_archive_arch is defined
+
+    - name: 5. 安装 yq
+      block:
+        - name: 5.1 计算 yq 官方二进制架构
           set_fact:
             yq_binary_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
           when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 3.2 不支持的 yq 架构提示
+        - name: 5.2 不支持的 yq 架构提示
           fail:
             msg: "当前架构 {{ ansible_architecture }} 未配置 yq 官方二进制下载规则，请补充 playbook。"
           when: ansible_architecture not in ['x86_64', 'aarch64']
 
-        - name: 3.3 下载 yq 官方二进制文件
+        - name: 5.3 下载 yq 官方二进制文件
           get_url:
             url: "https://github.com/mikefarah/yq/releases/download/v{{ yq_version }}/yq_linux_{{ yq_binary_arch }}"
             dest: /usr/local/bin/yq
             mode: "0755"
             timeout: 60
 
-    - name: 4. 安装 lsd
+    - name: 6. 安装 lsd
       block:
-        - name: 4.1 优先通过 apt 安装 lsd
+        - name: 6.1 优先通过 apt 安装 lsd
           apt:
             name: lsd
             state: present
       rescue:
-        - name: 4.2 非 Ubuntu 系统不执行 lsd 回退安装
+        - name: 6.2 非 Ubuntu 系统不执行 lsd 回退安装
           fail:
             msg: "当前系统 {{ ansible_distribution }} {{ ansible_distribution_version }} 未配置 lsd 回退安装逻辑，请补充 playbook。"
           when: ansible_distribution != 'Ubuntu'
 
-        - name: 4.3 较新的 Ubuntu 上 apt 安装 lsd 失败提示
+        - name: 6.3 较新的 Ubuntu 上 apt 安装 lsd 失败提示
           fail:
             msg: "当前 Ubuntu 版本 {{ ansible_distribution_version }} 按预期应可通过 apt 安装 lsd，但安装失败，请检查仓库或网络。"
           when:
             - ansible_distribution == 'Ubuntu'
             - ansible_distribution_version is version('23.04', '>=')
 
-        - name: 4.4 计算 lsd 二进制包架构
+        - name: 6.4 计算 lsd 二进制包架构
           set_fact:
             lsd_deb_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
           when:
@@ -104,7 +206,7 @@
             - ansible_distribution_version is version('23.04', '<')
             - ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 4.5 下载 lsd 安装包
+        - name: 6.5 下载 lsd 安装包
           get_url:
             url: "https://github.com/lsd-rs/lsd/releases/download/v{{ lsd_version }}/lsd-musl_{{ lsd_version }}_{{ lsd_deb_arch }}_xz.deb"
             dest: "/tmp/lsd.deb"
@@ -115,7 +217,7 @@
             - ansible_distribution_version is version('23.04', '<')
             - lsd_deb_arch is defined
 
-        - name: 4.6 安装 lsd 安装包
+        - name: 6.6 安装 lsd 安装包
           apt:
             deb: /tmp/lsd.deb
           when:
@@ -123,7 +225,7 @@
             - ansible_distribution_version is version('23.04', '<')
             - lsd_deb_arch is defined
 
-        - name: 4.7 不支持的 lsd 回退架构提示
+        - name: 6.7 不支持的 lsd 回退架构提示
           fail:
             msg: "当前架构 {{ ansible_architecture }} 未配置 lsd 二进制包下载规则，请补充 playbook。"
           when:
@@ -131,7 +233,7 @@
             - ansible_distribution_version is version('23.04', '<')
             - ansible_architecture not in ['x86_64', 'aarch64']
 
-    - name: 5. 下载并安装最新版 fzf 二进制文件
+    - name: 7. 下载并安装最新版 fzf 二进制文件
       block:
         - name: 下载 fzf 压缩包
           get_url:
@@ -157,19 +259,19 @@
             owner: root
             group: root
 
-    - name: 6. 安装 Lazygit
+    - name: 8. 安装 Lazygit
       block:
-        - name: 6.1 计算 Lazygit 官方二进制架构
+        - name: 8.1 计算 Lazygit 官方二进制架构
           set_fact:
             lazygit_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
           when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 6.2 不支持的 Lazygit 架构提示
+        - name: 8.2 不支持的 Lazygit 架构提示
           fail:
             msg: "当前架构 {{ ansible_architecture }} 未配置 Lazygit 官方二进制下载规则，请补充 playbook。"
           when: ansible_architecture not in ['x86_64', 'aarch64']
 
-        - name: 6.3 创建 Lazygit 临时解压目录
+        - name: 8.3 创建 Lazygit 临时解压目录
           file:
             path: /tmp/lazygit
             state: directory
@@ -177,20 +279,20 @@
             group: root
             mode: "0755"
 
-        - name: 6.4 下载 Lazygit 官方二进制包
+        - name: 8.4 下载 Lazygit 官方二进制包
           get_url:
             url: "https://github.com/jesseduffield/lazygit/releases/download/v{{ lazygit_version }}/lazygit_{{ lazygit_version }}_Linux_{{ lazygit_archive_arch }}.tar.gz"
             dest: /tmp/lazygit.tar.gz
             mode: "0644"
             timeout: 60
 
-        - name: 6.5 解压 Lazygit 官方二进制包
+        - name: 8.5 解压 Lazygit 官方二进制包
           unarchive:
             src: /tmp/lazygit.tar.gz
             dest: /tmp/lazygit
             remote_src: yes
 
-        - name: 6.6 安装 Lazygit 可执行文件
+        - name: 8.6 安装 Lazygit 可执行文件
           copy:
             src: /tmp/lazygit/lazygit
             dest: /usr/local/bin/lazygit
@@ -199,7 +301,7 @@
             mode: "0755"
             remote_src: yes
 
-        - name: 6.7 创建 Lazygit 配置目录
+        - name: 8.7 创建 Lazygit 配置目录
           file:
             path: "{{ user_home }}/.config/lazygit"
             state: directory
@@ -207,7 +309,7 @@
             group: "{{ current_user }}"
             mode: "0755"
 
-        - name: 6.8 部署 Lazygit 配置文件
+        - name: 8.8 部署 Lazygit 配置文件
           copy:
             src: files/lazygit.yml
             dest: "{{ user_home }}/.config/lazygit/config.yml"
@@ -215,9 +317,9 @@
             group: "{{ current_user }}"
             mode: "0644"
 
-    - name: 7. 配置 Fish Shell 初始化环境
+    - name: 9. 配置 Fish Shell 初始化环境
       block:
-        - name: 7.1 创建系统 Fish conf.d 目录
+        - name: 9.1 创建系统 Fish conf.d 目录
           file:
             path: /etc/fish/conf.d
             state: directory
@@ -225,7 +327,7 @@
             group: root
             mode: "0755"
 
-        - name: 7.2 部署 zoxide Fish 配置
+        - name: 9.2 部署 zoxide Fish 配置
           copy:
             src: files/zoxide.fish
             dest: /etc/fish/conf.d/zoxide.fish
@@ -233,7 +335,7 @@
             group: root
             mode: "0644"
 
-        - name: 7.3 部署 alias Fish 配置
+        - name: 9.3 部署 alias Fish 配置
           copy:
             src: files/alias.fish
             dest: /etc/fish/conf.d/alias.fish
@@ -241,7 +343,7 @@
             group: root
             mode: "0644"
 
-        - name: 7.4 部署 fzf Fish 配置
+        - name: 9.4 部署 fzf Fish 配置
           copy:
             src: files/fzf.fish
             dest: /etc/fish/conf.d/fzf.fish
@@ -249,7 +351,7 @@
             group: root
             mode: "0644"
 
-        - name: 7.5 部署 direnv Fish 配置
+        - name: 9.5 部署 direnv Fish 配置
           copy:
             src: files/direnv.fish
             dest: /etc/fish/conf.d/direnv.fish
@@ -257,19 +359,19 @@
             group: root
             mode: "0644"
 
-    - name: 8. 安装 Neovim 和 NvChad
+    - name: 10. 安装 Neovim 和 NvChad
       block:
-        - name: 8.1 计算 Neovim 官方二进制架构
+        - name: 10.1 计算 Neovim 官方二进制架构
           set_fact:
             neovim_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
           when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 8.2 不支持的 Neovim 架构提示
+        - name: 10.2 不支持的 Neovim 架构提示
           fail:
             msg: "当前架构 {{ ansible_architecture }} 未配置 Neovim 官方二进制下载规则，请补充 playbook。"
           when: ansible_architecture not in ['x86_64', 'aarch64']
 
-        - name: 8.3 安装 Neovim 运行依赖
+        - name: 10.3 安装 Neovim 运行依赖
           apt:
             name:
               - unzip
@@ -283,19 +385,19 @@
               - python3-pynvim
             state: present
 
-        - name: 8.4 下载官方 Neovim 二进制包
+        - name: 10.4 下载官方 Neovim 二进制包
           get_url:
             url: "https://github.com/neovim/neovim/releases/download/v{{ neovim_version }}/nvim-linux-{{ neovim_archive_arch }}.tar.gz"
             dest: /tmp/nvim.tar.gz
             mode: "0644"
             timeout: 60
 
-        - name: 8.5 清理旧的官方 Neovim 安装目录
+        - name: 10.5 清理旧的官方 Neovim 安装目录
           file:
             path: /opt/nvim
             state: absent
 
-        - name: 8.6 创建官方 Neovim 安装目录
+        - name: 10.6 创建官方 Neovim 安装目录
           file:
             path: /opt/nvim
             state: directory
@@ -303,7 +405,7 @@
             group: root
             mode: "0755"
 
-        - name: 8.7 解压官方 Neovim 二进制包到目标目录
+        - name: 10.7 解压官方 Neovim 二进制包到目标目录
           unarchive:
             src: /tmp/nvim.tar.gz
             dest: /opt/nvim
@@ -311,14 +413,14 @@
             extra_opts:
               - --strip-components=1
 
-        - name: 8.8 创建 nvim 可执行文件软链接
+        - name: 10.8 创建 nvim 可执行文件软链接
           file:
             src: /opt/nvim/bin/nvim
             dest: /usr/local/bin/nvim
             state: link
             force: true
 
-        - name: 8.9 创建 Neovim 配置父目录
+        - name: 10.9 创建 Neovim 配置父目录
           file:
             path: "{{ user_home }}/.config"
             state: directory
@@ -326,12 +428,12 @@
             group: "{{ current_user }}"
             mode: "0755"
 
-        - name: 8.10 清理已有的 Neovim 配置目录
+        - name: 10.10 清理已有的 Neovim 配置目录
           file:
             path: "{{ user_home }}/.config/nvim"
             state: absent
 
-        - name: 8.11 克隆 NvChad starter 配置
+        - name: 10.11 克隆 NvChad starter 配置
           become: true
           become_user: "{{ current_user }}"
           git:
@@ -340,12 +442,12 @@
             version: main
             update: yes
 
-        - name: 8.12 删除 NvChad starter 自带 git 元数据
+        - name: 10.12 删除 NvChad starter 自带 git 元数据
           file:
             path: "{{ user_home }}/.config/nvim/.git"
             state: absent
 
-        - name: 8.13 首次同步 NvChad 插件
+        - name: 10.13 首次同步 NvChad 插件
           become: true
           become_user: "{{ current_user }}"
           shell: nvim --headless "+Lazy! sync" +qa
@@ -355,32 +457,32 @@
             HOME: "{{ user_home }}"
           changed_when: false
 
-        - name: 8.14 提示后续执行 MasonInstallAll 和 TSInstallAll
+        - name: 10.14 提示后续执行 MasonInstallAll 和 TSInstallAll
           debug:
             msg: >-
               NvChad 已部署完成。根据 NvChad 官方安装文档，首次进入 nvim 后可继续执行
               :MasonInstallAll 和 :TSInstallAll 以安装语言服务器和 Treesitter 解析器。
 
-    - name: 9. 将当前用户的默认 Shell 改为 Fish
+    - name: 11. 将当前用户的默认 Shell 改为 Fish
       user:
         name: "{{ current_user }}"
         shell: /usr/bin/fish
 
-    - name: 10. 创建常用命令软链接
+    - name: 12. 创建常用命令软链接
       block:
-        - name: 10.1 创建 python 软链接
+        - name: 12.1 创建 python 软链接
           file:
             src: /usr/bin/python3
             dest: /usr/local/bin/python
             state: link
 
-        - name: 10.2 创建 bat 软链接
+        - name: 12.2 创建 bat 软链接
           file:
             src: /usr/bin/batcat
             dest: /usr/local/bin/bat
             state: link
 
-        - name: 10.3 创建 fd 软链接
+        - name: 12.3 创建 fd 软链接
           file:
             src: /usr/bin/fdfind
             dest: /usr/local/bin/fd
