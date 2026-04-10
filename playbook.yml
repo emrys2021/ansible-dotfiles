@@ -63,22 +63,17 @@
     - name: 3. 安装 zoxide
       ignore_errors: true
       block:
-        - name: 3.1 优先通过 apt 安装 zoxide
-          apt:
-            name: zoxide
-            state: present
-      rescue:
-        - name: 3.2 计算 zoxide 官方二进制架构
+        - name: 3.1 计算 zoxide 官方二进制架构
           set_fact:
             zoxide_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'aarch64'}[ansible_architecture] }}"
           when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 3.3 不支持的 zoxide 架构提示
+        - name: 3.2 不支持的 zoxide 架构提示
           fail:
             msg: "当前架构 {{ ansible_architecture }} 未配置 zoxide 官方二进制下载规则，请补充 playbook。"
           when: ansible_architecture not in ['x86_64', 'aarch64']
 
-        - name: 3.4 创建 zoxide 临时解压目录
+        - name: 3.3 创建 zoxide 临时解压目录
           file:
             path: /tmp/zoxide
             state: directory
@@ -87,7 +82,7 @@
             mode: "0755"
           when: zoxide_archive_arch is defined
 
-        - name: 3.5 下载 zoxide 官方二进制包
+        - name: 3.4 下载 zoxide 官方二进制包
           get_url:
             url: "https://github.com/ajeetdsouza/zoxide/releases/download/v{{ zoxide_version }}/zoxide-{{ zoxide_version }}-{{ zoxide_archive_arch }}-unknown-linux-musl.tar.gz"
             dest: /tmp/zoxide.tar.gz
@@ -95,14 +90,14 @@
             timeout: 60
           when: zoxide_archive_arch is defined
 
-        - name: 3.6 解压 zoxide 官方二进制包
+        - name: 3.5 解压 zoxide 官方二进制包
           unarchive:
             src: /tmp/zoxide.tar.gz
             dest: /tmp/zoxide
             remote_src: yes
           when: zoxide_archive_arch is defined
 
-        - name: 3.7 安装 zoxide 可执行文件
+        - name: 3.6 安装 zoxide 可执行文件
           copy:
             src: /tmp/zoxide/zoxide
             dest: /usr/local/bin/zoxide
@@ -111,59 +106,64 @@
             mode: "0755"
             remote_src: yes
           when: zoxide_archive_arch is defined
-
     - name: 4. 安装 eza
       ignore_errors: true
       block:
-        - name: 4.1 优先通过 apt 安装 eza
+        - name: 4.1 安装 eza 仓库所需组件
           apt:
-            name: eza
+            name:
+              - gpg
             state: present
-      rescue:
-        - name: 4.2 计算 eza 官方二进制架构
+            update_cache: yes
+
+        - name: 4.2 计算 eza 仓库架构
           set_fact:
-            eza_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'aarch64'}[ansible_architecture] }}"
+            eza_repo_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
           when: ansible_architecture in ['x86_64', 'aarch64']
 
         - name: 4.3 不支持的 eza 架构提示
           fail:
-            msg: "当前架构 {{ ansible_architecture }} 未配置 eza 官方二进制下载规则，请补充 playbook。"
+            msg: "当前架构 {{ ansible_architecture }} 未配置 eza 官方仓库规则，请补充 playbook。"
           when: ansible_architecture not in ['x86_64', 'aarch64']
 
-        - name: 4.4 创建 eza 临时解压目录
+        - name: 4.4 创建 eza 仓库 keyrings 目录
           file:
-            path: /tmp/eza
+            path: /etc/apt/keyrings
             state: directory
             owner: root
             group: root
             mode: "0755"
-          when: eza_archive_arch is defined
 
-        - name: 4.5 下载 eza 官方二进制包
+        - name: 4.5 下载 eza 仓库 GPG 公钥
           get_url:
-            url: "https://github.com/eza-community/eza/releases/download/v{{ eza_version }}/eza_{{ eza_archive_arch }}-unknown-linux-gnu.tar.gz"
-            dest: /tmp/eza.tar.gz
+            url: https://raw.githubusercontent.com/eza-community/eza/main/deb.asc
+            dest: /tmp/eza-deb.asc
             mode: "0644"
             timeout: 60
-          when: eza_archive_arch is defined
+          when: eza_repo_arch is defined
 
-        - name: 4.6 解压 eza 官方二进制包
-          unarchive:
-            src: /tmp/eza.tar.gz
-            dest: /tmp/eza
-            remote_src: yes
-          when: eza_archive_arch is defined
+        - name: 4.6 导入 eza 仓库 GPG 公钥
+          command: gpg --dearmor --yes -o /etc/apt/keyrings/gierens.gpg /tmp/eza-deb.asc
+          when: eza_repo_arch is defined
 
-        - name: 4.7 安装 eza 可执行文件
-          copy:
-            src: /tmp/eza/eza
-            dest: /usr/local/bin/eza
-            owner: root
-            group: root
-            mode: "0755"
-            remote_src: yes
-          when: eza_archive_arch is defined
+        - name: 4.7 配置 eza 官方 Debian/Ubuntu 仓库
+          apt_repository:
+            repo: "deb [arch={{ eza_repo_arch }} signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main"
+            filename: gierens
+            state: present
+            update_cache: no
+          when: eza_repo_arch is defined
 
+        - name: 4.8 更新 apt 缓存
+          apt:
+            update_cache: yes
+          when: eza_repo_arch is defined
+
+        - name: 4.9 通过 apt 安装 eza
+          apt:
+            name: eza
+            state: present
+          when: eza_repo_arch is defined
     - name: 5. 安装 yq
       ignore_errors: true
       block:
@@ -187,64 +187,44 @@
     - name: 6. 安装 lsd
       ignore_errors: true
       block:
-        - name: 6.1 优先通过 apt 安装 lsd
-          apt:
-            name: lsd
-            state: present
-      rescue:
-        - name: 6.2 非 Ubuntu 系统不执行 lsd 回退安装
-          fail:
-            msg: "当前系统 {{ ansible_distribution }} {{ ansible_distribution_version }} 未配置 lsd 回退安装逻辑，请补充 playbook。"
-          when: ansible_distribution != 'Ubuntu'
-
-        - name: 6.3 较新的 Ubuntu 上 apt 安装 lsd 失败提示
-          fail:
-            msg: "当前 Ubuntu 版本 {{ ansible_distribution_version }} 按预期应可通过 apt 安装 lsd，但安装失败，请检查仓库或网络。"
-          when:
-            - ansible_distribution == 'Ubuntu'
-            - ansible_distribution_version is version('23.04', '>=')
-
-        - name: 6.4 计算 lsd 二进制包架构
+        - name: 6.1 计算 lsd 二进制包架构
           set_fact:
             lsd_deb_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
-          when:
-            - ansible_distribution == 'Ubuntu'
-            - ansible_distribution_version is version('23.04', '<')
-            - ansible_architecture in ['x86_64', 'aarch64']
+          when: ansible_architecture in ['x86_64', 'aarch64']
 
-        - name: 6.5 下载 lsd 安装包
+        - name: 6.2 不支持的 lsd 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 lsd 二进制包下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 6.3 下载 lsd 安装包
           get_url:
             url: "https://github.com/lsd-rs/lsd/releases/download/v{{ lsd_version }}/lsd-musl_{{ lsd_version }}_{{ lsd_deb_arch }}_xz.deb"
             dest: "/tmp/lsd.deb"
             mode: "0644"
             timeout: 60
-          when:
-            - ansible_distribution == 'Ubuntu'
-            - ansible_distribution_version is version('23.04', '<')
-            - lsd_deb_arch is defined
+          when: lsd_deb_arch is defined
 
-        - name: 6.6 安装 lsd 安装包
+        - name: 6.4 安装 lsd 安装包
           apt:
             deb: /tmp/lsd.deb
-          when:
-            - ansible_distribution == 'Ubuntu'
-            - ansible_distribution_version is version('23.04', '<')
-            - lsd_deb_arch is defined
-
-        - name: 6.7 不支持的 lsd 回退架构提示
-          fail:
-            msg: "当前架构 {{ ansible_architecture }} 未配置 lsd 二进制包下载规则，请补充 playbook。"
-          when:
-            - ansible_distribution == 'Ubuntu'
-            - ansible_distribution_version is version('23.04', '<')
-            - ansible_architecture not in ['x86_64', 'aarch64']
-
+          when: lsd_deb_arch is defined
     - name: 7. 下载并安装最新版 fzf 二进制文件
       ignore_errors: true
       block:
-        - name: 下载 fzf 压缩包
+        - name: 7.1 计算 fzf 官方二进制架构
+          set_fact:
+            fzf_archive_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+          when: ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 7.2 不支持的 fzf 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 fzf 官方二进制下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 7.3 下载 fzf 压缩包
           get_url:
-            url: "https://github.com/junegunn/fzf/releases/download/v{{ fzf_version }}/fzf-{{ fzf_version }}-linux_amd64.tar.gz"
+            url: "https://github.com/junegunn/fzf/releases/download/v{{ fzf_version }}/fzf-{{ fzf_version }}-linux_{{ fzf_archive_arch }}.tar.gz"
             dest: "/tmp/fzf.tar.gz"
             mode: "0644"
             timeout: 60
@@ -252,20 +232,22 @@
           until: download_result is succeeded
           retries: 10
           delay: 5
+          when: fzf_archive_arch is defined
 
-        - name: 解压 fzf
+        - name: 7.4 解压 fzf
           unarchive:
             src: "/tmp/fzf.tar.gz"
             dest: "/usr/local/bin"
             remote_src: yes # 表示源文件已经在目标机器上
+          when: fzf_archive_arch is defined
 
-        - name: 赋予执行权限
+        - name: 7.5 赋予执行权限
           file:
             path: /usr/local/bin/fzf
             mode: "0755"
             owner: root
             group: root
-
+          when: fzf_archive_arch is defined
     - name: 8. 安装 Lazygit
       ignore_errors: true
       block:
@@ -392,9 +374,9 @@
                   - software-properties-common
                 state: present
 
-            - name: 10.2.2 添加 Neovim stable PPA
+            - name: 10.2.2 添加 Neovim unstable PPA
               apt_repository:
-                repo: ppa:neovim-ppa/stable
+                repo: ppa:neovim-ppa/unstable
                 state: present
                 update_cache: no
 
