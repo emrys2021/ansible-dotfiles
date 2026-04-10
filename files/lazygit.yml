@@ -1,0 +1,9 @@
+gui:
+  showRandomTip: false
+  nerdFontsVersion: "3"
+git:
+  autoFetch: true
+os:
+  editPreset: "nvim"
+update:
+  method: never

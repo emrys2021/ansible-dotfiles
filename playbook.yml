@@ -1,0 +1,368 @@
+---
+- name: 个人工作环境自动化配置
+  hosts: local
+  become: true
+  environment:
+    http_proxy: "{{ lookup('env', 'http_proxy') }}"
+    https_proxy: "{{ lookup('env', 'https_proxy') }}"
+    HTTP_PROXY: "{{ lookup('env', 'HTTP_PROXY') }}"
+    HTTPS_PROXY: "{{ lookup('env', 'HTTPS_PROXY') }}"
+  vars:
+    # 定义想要安装的版本，方便以后升级
+    fzf_version: "0.71.0"
+    lsd_version: "1.2.0"
+    lazygit_version: "0.56.0"
+    neovim_version: "0.11.1"
+    current_user: "{{ lookup('env', 'USER') }}"
+    user_home: "{{ lookup('env', 'HOME') }}"
+
+  tasks:
+    - name: 1. 安装 Fish
+      block:
+        - name: 1.1 安装添加 Fish 仓库所需组件
+          apt:
+            name:
+              - software-properties-common
+            state: present
+            update_cache: yes
+
+        - name: 1.2 添加 fish PPA 仓库
+          apt_repository:
+            repo: ppa:fish-shell/release-4
+            state: present
+            update_cache: no
+
+        - name: 1.3 更新 apt 缓存
+          apt:
+            update_cache: yes
+
+        - name: 1.4 安装 Fish
+          apt:
+            name: fish
+            state: present
+
+    - name: 2. 安装基础软件
+      apt:
+        name:
+          [
+            git,
+            direnv,
+            curl,
+            jq,
+            yq,
+            zoxide,
+            bat,
+            eza,
+            fd-find,
+            python3-pexpect,
+          ]
+        state: present
+
+    - name: 3. 安装 lsd
+      block:
+        - name: 3.1 优先通过 apt 安装 lsd
+          apt:
+            name: lsd
+            state: present
+      rescue:
+        - name: 3.2 非 Ubuntu 系统不执行 lsd 回退安装
+          fail:
+            msg: "当前系统 {{ ansible_distribution }} {{ ansible_distribution_version }} 未配置 lsd 回退安装逻辑，请补充 playbook。"
+          when: ansible_distribution != 'Ubuntu'
+
+        - name: 3.3 较新的 Ubuntu 上 apt 安装 lsd 失败提示
+          fail:
+            msg: "当前 Ubuntu 版本 {{ ansible_distribution_version }} 按预期应可通过 apt 安装 lsd，但安装失败，请检查仓库或网络。"
+          when:
+            - ansible_distribution == 'Ubuntu'
+            - ansible_distribution_version is version('23.04', '>=')
+
+        - name: 3.4 计算 lsd 二进制包架构
+          set_fact:
+            lsd_deb_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+          when:
+            - ansible_distribution == 'Ubuntu'
+            - ansible_distribution_version is version('23.04', '<')
+            - ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 3.5 下载 lsd 安装包
+          get_url:
+            url: "https://github.com/lsd-rs/lsd/releases/download/v{{ lsd_version }}/lsd-musl_{{ lsd_version }}_{{ lsd_deb_arch }}_xz.deb"
+            dest: "/tmp/lsd.deb"
+            mode: "0644"
+            timeout: 60
+          when:
+            - ansible_distribution == 'Ubuntu'
+            - ansible_distribution_version is version('23.04', '<')
+            - lsd_deb_arch is defined
+
+        - name: 3.6 安装 lsd 安装包
+          apt:
+            deb: /tmp/lsd.deb
+          when:
+            - ansible_distribution == 'Ubuntu'
+            - ansible_distribution_version is version('23.04', '<')
+            - lsd_deb_arch is defined
+
+        - name: 3.7 不支持的 lsd 回退架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 lsd 二进制包下载规则，请补充 playbook。"
+          when:
+            - ansible_distribution == 'Ubuntu'
+            - ansible_distribution_version is version('23.04', '<')
+            - ansible_architecture not in ['x86_64', 'aarch64']
+
+    - name: 4. 下载并安装最新版 fzf 二进制文件
+      block:
+        - name: 下载 fzf 压缩包
+          get_url:
+            url: "https://github.com/junegunn/fzf/releases/download/v{{ fzf_version }}/fzf-{{ fzf_version }}-linux_amd64.tar.gz"
+            dest: "/tmp/fzf.tar.gz"
+            mode: "0644"
+            timeout: 60
+          register: download_result
+          until: download_result is succeeded
+          retries: 10
+          delay: 5
+
+        - name: 解压 fzf
+          unarchive:
+            src: "/tmp/fzf.tar.gz"
+            dest: "/usr/local/bin"
+            remote_src: yes # 表示源文件已经在目标机器上
+
+        - name: 赋予执行权限
+          file:
+            path: /usr/local/bin/fzf
+            mode: "0755"
+            owner: root
+            group: root
+
+    - name: 5. 安装 Lazygit
+      block:
+        - name: 5.1 计算 Lazygit 官方二进制架构
+          set_fact:
+            lazygit_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+          when: ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 5.2 不支持的 Lazygit 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 Lazygit 官方二进制下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 5.3 创建 Lazygit 临时解压目录
+          file:
+            path: /tmp/lazygit
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: 5.4 下载 Lazygit 官方二进制包
+          get_url:
+            url: "https://github.com/jesseduffield/lazygit/releases/download/v{{ lazygit_version }}/lazygit_{{ lazygit_version }}_Linux_{{ lazygit_archive_arch }}.tar.gz"
+            dest: /tmp/lazygit.tar.gz
+            mode: "0644"
+            timeout: 60
+
+        - name: 5.5 解压 Lazygit 官方二进制包
+          unarchive:
+            src: /tmp/lazygit.tar.gz
+            dest: /tmp/lazygit
+            remote_src: yes
+
+        - name: 5.6 安装 Lazygit 可执行文件
+          copy:
+            src: /tmp/lazygit/lazygit
+            dest: /usr/local/bin/lazygit
+            owner: root
+            group: root
+            mode: "0755"
+            remote_src: yes
+
+        - name: 5.7 创建 Lazygit 配置目录
+          file:
+            path: "{{ user_home }}/.config/lazygit"
+            state: directory
+            owner: "{{ current_user }}"
+            group: "{{ current_user }}"
+            mode: "0755"
+
+        - name: 5.8 部署 Lazygit 配置文件
+          copy:
+            src: files/lazygit.yml
+            dest: "{{ user_home }}/.config/lazygit/config.yml"
+            owner: "{{ current_user }}"
+            group: "{{ current_user }}"
+            mode: "0644"
+
+    - name: 6. 配置 Fish Shell 初始化环境
+      block:
+        - name: 6.1 创建系统 Fish conf.d 目录
+          file:
+            path: /etc/fish/conf.d
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: 6.2 部署 zoxide Fish 配置
+          copy:
+            src: files/zoxide.fish
+            dest: /etc/fish/conf.d/zoxide.fish
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: 6.3 部署 alias Fish 配置
+          copy:
+            src: files/alias.fish
+            dest: /etc/fish/conf.d/alias.fish
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: 6.4 部署 fzf Fish 配置
+          copy:
+            src: files/fzf.fish
+            dest: /etc/fish/conf.d/fzf.fish
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: 6.5 部署 direnv Fish 配置
+          copy:
+            src: files/direnv.fish
+            dest: /etc/fish/conf.d/direnv.fish
+            owner: root
+            group: root
+            mode: "0644"
+
+    - name: 7. 安装 Neovim 和 NvChad
+      block:
+        - name: 7.1 计算 Neovim 官方二进制架构
+          set_fact:
+            neovim_archive_arch: "{{ {'x86_64': 'x86_64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+          when: ansible_architecture in ['x86_64', 'aarch64']
+
+        - name: 7.2 不支持的 Neovim 架构提示
+          fail:
+            msg: "当前架构 {{ ansible_architecture }} 未配置 Neovim 官方二进制下载规则，请补充 playbook。"
+          when: ansible_architecture not in ['x86_64', 'aarch64']
+
+        - name: 7.3 安装 Neovim 运行依赖
+          apt:
+            name:
+              - unzip
+              - gcc
+              - g++
+              - make
+              - ripgrep
+              - xclip
+              - xsel
+              - npm
+              - python3-pynvim
+            state: present
+
+        - name: 7.4 下载官方 Neovim 二进制包
+          get_url:
+            url: "https://github.com/neovim/neovim/releases/download/v{{ neovim_version }}/nvim-linux-{{ neovim_archive_arch }}.tar.gz"
+            dest: /tmp/nvim.tar.gz
+            mode: "0644"
+            timeout: 60
+
+        - name: 7.5 清理旧的官方 Neovim 安装目录
+          file:
+            path: /opt/nvim
+            state: absent
+
+        - name: 7.6 创建官方 Neovim 安装目录
+          file:
+            path: /opt/nvim
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: 7.7 解压官方 Neovim 二进制包到目标目录
+          unarchive:
+            src: /tmp/nvim.tar.gz
+            dest: /opt/nvim
+            remote_src: yes
+            extra_opts:
+              - --strip-components=1
+
+        - name: 7.8 创建 nvim 可执行文件软链接
+          file:
+            src: /opt/nvim/bin/nvim
+            dest: /usr/local/bin/nvim
+            state: link
+            force: true
+
+        - name: 7.9 创建 Neovim 配置父目录
+          file:
+            path: "{{ user_home }}/.config"
+            state: directory
+            owner: "{{ current_user }}"
+            group: "{{ current_user }}"
+            mode: "0755"
+
+        - name: 7.10 清理已有的 Neovim 配置目录
+          file:
+            path: "{{ user_home }}/.config/nvim"
+            state: absent
+
+        - name: 7.11 克隆 NvChad starter 配置
+          become: true
+          become_user: "{{ current_user }}"
+          git:
+            repo: https://github.com/NvChad/starter
+            dest: "{{ user_home }}/.config/nvim"
+            version: main
+            update: yes
+
+        - name: 7.12 删除 NvChad starter 自带 git 元数据
+          file:
+            path: "{{ user_home }}/.config/nvim/.git"
+            state: absent
+
+        - name: 7.13 首次同步 NvChad 插件
+          become: true
+          become_user: "{{ current_user }}"
+          shell: nvim --headless "+Lazy! sync" +qa
+          args:
+            chdir: "{{ user_home }}"
+          environment:
+            HOME: "{{ user_home }}"
+          changed_when: false
+
+        - name: 7.14 提示后续执行 MasonInstallAll 和 TSInstallAll
+          debug:
+            msg: >-
+              NvChad 已部署完成。根据 NvChad 官方安装文档，首次进入 nvim 后可继续执行
+              :MasonInstallAll 和 :TSInstallAll 以安装语言服务器和 Treesitter 解析器。
+
+    - name: 8. 将当前用户的默认 Shell 改为 Fish
+      user:
+        name: "{{ current_user }}"
+        shell: /usr/bin/fish
+
+    - name: 9. 创建常用命令软链接
+      block:
+        - name: 9.1 创建 python 软链接
+          file:
+            src: /usr/bin/python3
+            dest: /usr/local/bin/python
+            state: link
+
+        - name: 9.2 创建 bat 软链接
+          file:
+            src: /usr/bin/batcat
+            dest: /usr/local/bin/bat
+            state: link
+
+        - name: 9.3 创建 fd 软链接
+          file:
+            src: /usr/bin/fdfind
+            dest: /usr/local/bin/fd
+            state: link
